@@ -33,19 +33,44 @@ extern "C" {
 extern "C" {
     void load_tile_ifm(int* image, int ifm_buffer[tile_ichan][tile_ifm_height][tile_ifm_width],
                        int input, int x, int y, int i_size, int i_chan){
-        LOAD_WEIGHT_OCHAN: for(int ti = 0; ti < tile_ichan; ti++){
-            LOAD_WEIGHT_ICHAN: for(int ty = 0; ty < tile_ifm_height; ty++){
-                LOAD_WEIGHT_ITER: for(int tx = 0; tx < tile_ifm_width; tx++){
+
+    	ZERO_IFM_ICHAN: for(int ti = 0; ti < tile_ichan; ti++){
+			#pragma hls unroll
+			ZERO_IFM_HEIGHT: for(int ty = 0; ty < tile_ifm_height; ty++){
+				#pragma hls unroll
+				ZERO_IFM_WIDTH: for(int tx = 0; tx < tile_ifm_width; tx++){
+					#pragma hls unroll
+						ifm_buffer[ti][ty][tx] = 0;
+				}
+			}
+		}
+
+    	int ichan_bound = tile_ichan;
+    	if(input+tile_ichan > i_chan)
+    		ichan_bound = i_chan-input;
+
+		int ty_start = 0;
+		if(ty_start+y-padding<0)
+			ty_start = padding-y;
+		int ifm_height_bound = tile_ifm_height;
+		if(y+ifm_height_bound-padding > i_size)
+			ifm_height_bound = i_size+padding-y;
+
+		int tx_start = 0;
+		if(tx_start+x-padding<0)
+			tx_start = padding-x;
+		int ifm_width_bound = tile_ifm_width;
+		if(x+ifm_width_bound-padding > i_size)
+			ifm_width_bound = i_size+padding-x;
+
+        LOAD_WEIGHT_OCHAN: for(int ti = 0; ti < ichan_bound; ti++){
+            LOAD_WEIGHT_ICHAN: for(int ty = ty_start; ty < ifm_height_bound; ty++){
+                LOAD_WEIGHT_ITER: for(int tx = tx_start; tx < ifm_width_bound; tx++){
                     #pragma hls pipeline II=1
-                    if((tx + x - padding) < 0 || (ty + y - padding) < 0 || (tx + x - padding) >= i_size || (ty + y - padding) >= i_size || ti >= i_chan){
-                        ifm_buffer[ti][ty][tx] = 0;
-                    }
-                    else{
-                        int tii = ti + input;
-                        int tyy = ty + y - padding;
-                        int txx = tx + x - padding;
-                        ifm_buffer[ti][ty][tx] = image[tii * (i_size * i_size) + tyy * i_size + txx];
-                    }
+					int tii = ti + input;
+					int tyy = ty + y - padding;
+					int txx = tx + x - padding;
+					ifm_buffer[ti][ty][tx] = image[tii * (i_size * i_size) + tyy * i_size + txx];
                 }
             }
         }
@@ -57,23 +82,37 @@ extern "C" {
                           int kernel_buffer[tile_ochan][tile_ichan][9],
                           int row_idx_buffer[tile_ochan][tile_ichan][9],
                           int col_idx_buffer[tile_ochan][tile_ichan][9]){
-        LOAD_WEIGHT_OCHAN: for(int to = 0; to < tile_ochan; to++){
-            LOAD_WEIGHT_ICHAN: for(int ti = 0; ti < tile_ichan; ti++){
-                LOAD_WEIGHT_ITER: for(int iter = 0; iter < num_nonzero; iter++){
-                    #pragma hls pipeline II=1
-                    int too = to + output;
-                    int tii = ti + input;
-                    if(too >= o_chan || tii >= i_chan){
-                        kernel_buffer[to][ti][iter] = 0;
-                        row_idx_buffer[to][ti][iter] = 0;
-                        col_idx_buffer[to][ti][iter] = 0;
-                    }
-                    else{
-                        kernel_buffer[to][ti][iter] = weight[too * i_chan * num_nonzero + num_nonzero * tii + iter];
-                        row_idx_buffer[to][ti][iter] = row_idx[too * i_chan * num_nonzero + num_nonzero * tii + iter];
-                        col_idx_buffer[to][ti][iter] = col_idx[too * i_chan * num_nonzero + num_nonzero * tii + iter];
-                    }
-                }
+
+    	ZERO_WEIGHT_OCHAN: for(int to = 0; to < tile_ochan; to++){
+			#pragma hls unroll
+			ZERD_WEIGHT_ICHAN: for(int ti = 0; ti < tile_ichan; ti++){
+				#pragma hls unroll
+				ZERD_WEIGHT_ITER: for(int iter = 0; iter < 9; iter++){
+					#pragma hls unroll
+					kernel_buffer[to][ti][iter] = 0;
+					row_idx_buffer[to][ti][iter] = 0;
+					col_idx_buffer[to][ti][iter] = 0;
+				}
+			}
+    	}
+
+    	int ochan_bound = tile_ochan;
+    	if(output+tile_ochan > o_chan)
+    		ochan_bound = o_chan-output;
+
+    	int ichan_bound = tile_ichan;
+    	if(input+tile_ichan > i_chan)
+    		ichan_bound = i_chan-input;
+
+        LOAD_WEIGHT_OCHAN: for(int to = 0; to < ochan_bound; to++){
+            LOAD_WEIGHT_ICHAN: for(int ti = 0; ti < ichan_bound*num_nonzero; ti++){
+				#pragma hls pipeline II=1
+				int too = to + output;
+				int tii = ti + input*num_nonzero;
+				int iter = ti%num_nonzero;
+				kernel_buffer[to][ti/num_nonzero][iter] = weight[too * i_chan * num_nonzero + tii];
+				row_idx_buffer[to][ti/num_nonzero][iter] = row_idx[too * i_chan * num_nonzero + tii];
+				col_idx_buffer[to][ti/num_nonzero][iter] = col_idx[too * i_chan * num_nonzero + tii];
             }
         }
     }
@@ -81,17 +120,27 @@ extern "C" {
 
 extern "C" {
     void store_tile_ofm(int *out, int ofm_buffer[tile_ochan][tile_ofm_height][tile_ofm_width], int output, int o_chan, int o_size, int x, int y){
-        STORE_OFM_OCHAN: for(int to = 0; to < o_chan; to++){
-            STORE_OFM_HEIGHT: for(int ty = 0; ty < tile_ofm_height; ty++){
-                STORE_OFM_WIDTH: for(int tx = 0; tx < tile_ofm_width; tx++){
+        int ochan_bounds = tile_ochan;
+        if(output+ochan_bounds > o_chan)
+        		ochan_bounds = o_chan-output;
+
+        int height_bounds = tile_ofm_height;
+        if(y+height_bounds > o_size)
+        		height_bounds = o_size-y;
+
+        int width_bounds = tile_ofm_width;
+        if(x+width_bounds > o_size)
+        		width_bounds = o_size-x;
+
+    	STORE_OFM_OCHAN: for(int to = 0; to < ochan_bounds; to++){
+            STORE_OFM_HEIGHT: for(int ty = 0; ty < height_bounds; ty++){
+                STORE_OFM_WIDTH: for(int tx = 0; tx < width_bounds; tx++){
                     #pragma hls pipeline II=1
                     int too = to + output;
                     int tyy = ty + y;
                     int txx = tx + x;
 
-                    if(too < o_chan && tyy < o_size && txx < o_size){
-                        out[(too*o_size+tyy)*o_size + txx] = ofm_buffer[to][ty][tx];
-                    }
+                    out[(too*o_size+tyy)*o_size + txx] = ofm_buffer[to][ty][tx];
                 }
             }
         }
