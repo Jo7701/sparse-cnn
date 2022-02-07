@@ -1,0 +1,5 @@
+This document lists changes between each iteration of the kernel:
+
+February 2nd, 2022
+-Implemented burst reads for weights and input feature map
+-Fixed bug in store_tile_ofm where STORE_OFM_OCHAN loop bounds was incorrect
