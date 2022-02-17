@@ -63,9 +63,9 @@ extern "C" {
 		if(x+ifm_width_bound-padding > i_size)
 			ifm_width_bound = i_size+padding-x;
 
-        LOAD_WEIGHT_OCHAN: for(int ti = 0; ti < ichan_bound; ti++){
-            LOAD_WEIGHT_ICHAN: for(int ty = ty_start; ty < ifm_height_bound; ty++){
-                LOAD_WEIGHT_ITER: for(int tx = tx_start; tx < ifm_width_bound; tx++){
+        LOAD_IFM_ICHAN: for(int ti = 0; ti < ichan_bound; ti++){
+            LOAD_IFM_ROW: for(int ty = ty_start; ty < ifm_height_bound; ty++){
+                LOAD_IFM_COL: for(int tx = tx_start; tx < ifm_width_bound; tx++){
                     #pragma hls pipeline II=1
 					int tii = ti + input;
 					int tyy = ty + y - padding;
@@ -78,23 +78,10 @@ extern "C" {
 }
 
 extern "C" {
-    void load_tile_kernel(int *weight, int *row_idx, int *col_idx, int output, int input, int i_chan, int o_chan, int num_nonzero,
+    void load_tile_kernel(int *weight, int *row_col_idx, int output, int input, int i_chan, int o_chan, int num_nonzero,
                           int kernel_buffer[tile_ochan][tile_ichan][9],
                           int row_idx_buffer[tile_ochan][tile_ichan][9],
                           int col_idx_buffer[tile_ochan][tile_ichan][9]){
-
-    	ZERO_WEIGHT_OCHAN: for(int to = 0; to < tile_ochan; to++){
-			#pragma hls unroll
-			ZERD_WEIGHT_ICHAN: for(int ti = 0; ti < tile_ichan; ti++){
-				#pragma hls unroll
-				ZERD_WEIGHT_ITER: for(int iter = 0; iter < 9; iter++){
-					#pragma hls unroll
-					kernel_buffer[to][ti][iter] = 0;
-					row_idx_buffer[to][ti][iter] = 0;
-					col_idx_buffer[to][ti][iter] = 0;
-				}
-			}
-    	}
 
     	int ochan_bound = tile_ochan;
     	if(output+tile_ochan > o_chan)
@@ -110,9 +97,11 @@ extern "C" {
 				int too = to + output;
 				int tii = ti + input*num_nonzero;
 				int iter = ti%num_nonzero;
+				int row_col_val = row_col_idx[too * i_chan * num_nonzero + tii];
+
 				kernel_buffer[to][ti/num_nonzero][iter] = weight[too * i_chan * num_nonzero + tii];
-				row_idx_buffer[to][ti/num_nonzero][iter] = row_idx[too * i_chan * num_nonzero + tii];
-				col_idx_buffer[to][ti/num_nonzero][iter] = col_idx[too * i_chan * num_nonzero + tii];
+				row_idx_buffer[to][ti/num_nonzero][iter] = row_col_val >> 16; //upper 16 bits are the row index
+				col_idx_buffer[to][ti/num_nonzero][iter] = (row_col_val << 16) >> 16; //lower 16 bits are col index
             }
         }
     }
@@ -151,8 +140,7 @@ extern "C" {
 extern "C" {
     void sparse_conv(
         int *weight,
-        int *row_idx,
-        int *col_idx,
+        int *row_col_idx,
         int *image,
         int *out,
         int i_chan,
@@ -166,10 +154,9 @@ extern "C" {
     )
     {
 
-        #pragma HLS INTERFACE m_axi port=row_idx offset=slave bundle=gmem0
-        #pragma HLS INTERFACE m_axi port=col_idx offset=slave bundle=gmem1
-        #pragma HLS INTERFACE m_axi port=weight offset=slave bundle=gmem2
-        #pragma HLS INTERFACE m_axi port=image offset=slave bundle=gmem3
+        #pragma HLS INTERFACE m_axi port=row_col_idx offset=slave bundle=gmem0
+        #pragma HLS INTERFACE m_axi port=weight offset=slave bundle=gmem1
+        #pragma HLS INTERFACE m_axi port=image offset=slave bundle=gmem2
         #pragma HLS INTERFACE m_axi port=out offset=slave bundle=gmem3
 
         const int zero[tile_ochan*tile_ofm_height*tile_ofm_width] = {0};
@@ -196,7 +183,7 @@ extern "C" {
                     // Runs over each input channel of input feature map
                     MAIN_ICHAN: for(int input = 0; input < i_chan; input+=tile_ichan){
                         load_tile_ifm(image, ifm_buffer, input, x, y, i_size, i_chan);
-                        load_tile_kernel(weight, row_idx, col_idx, output, input, i_chan, o_chan, num_nonzero,
+                        load_tile_kernel(weight, row_col_idx, output, input, i_chan, o_chan, num_nonzero,
                                          kernel_buffer, row_idx_buffer, col_idx_buffer);
                         compute_engine(ofm_buffer, ifm_buffer, kernel_buffer, row_idx_buffer, col_idx_buffer, num_nonzero);
                     }
